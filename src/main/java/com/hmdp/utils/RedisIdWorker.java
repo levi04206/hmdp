@@ -8,7 +8,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 
 /**
- * id生成器:时间戳+序列号
+ * 全局id生成器:时间戳+序列号
  */
 @Component
 public class RedisIdWorker {
