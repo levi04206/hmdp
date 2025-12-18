@@ -82,8 +82,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             SECKILL_ORDER_EXECUTOR.shutdownNow();
         }
     }
-    //阻塞队列（线程尝试访问这个队列中的元素时，只有当队列中有元素时这个线程才会被唤醒，否则这个线程就会被阻塞）
-    private BlockingQueue<VoucherOrder> orderTasks = new ArrayBlockingQueue<>(1024*1024);
     private class VoucherOrderHandler implements Runnable{
         @Override
         public void run() {
@@ -155,7 +153,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             }
         }
     }
-
     /**
      * 阻塞队列
      */
