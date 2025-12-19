@@ -3,11 +3,7 @@ package com.hmdp.controller;
 
 import com.hmdp.dto.Result;
 import com.hmdp.service.IFollowService;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
 
@@ -25,6 +21,7 @@ public class FollowController {
     @Resource
     private IFollowService followService;
 
+
     /**
      * 关注或取消关注
      * @param followUserId
@@ -41,9 +38,19 @@ public class FollowController {
      * @param followUserId
      * @return
      */
-    @PutMapping("/follow/or/not/{followUserId}")
+    @GetMapping("/or/not/{followUserId}")
     public Result follow(@PathVariable("followUserId") Long followUserId){
         return  followService.followOrNot(followUserId);
+    }
+
+    /**
+     * 查询共同关注
+     * @param id
+     * @return
+     */
+    @GetMapping("/common/{id}")
+    public Result followCommons(@PathVariable("id") Long id){
+        return followService.followCommons(id);
     }
 
 }
