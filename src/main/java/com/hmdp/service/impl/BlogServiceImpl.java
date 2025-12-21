@@ -7,17 +7,22 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
+import com.hmdp.entity.Follow;
+import com.hmdp.entity.ScollResult;
 import com.hmdp.entity.User;
 import com.hmdp.mapper.BlogMapper;
 import com.hmdp.service.IBlogService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.service.IFollowService;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.SystemConstants;
 import com.hmdp.utils.UserHolder;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -25,6 +30,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.hmdp.utils.RedisConstants.BLOG_LIKED_KEY;
+import static com.hmdp.utils.RedisConstants.FEED_KEY;
 
 /**
  * <p>
@@ -38,9 +44,10 @@ import static com.hmdp.utils.RedisConstants.BLOG_LIKED_KEY;
 public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IBlogService {
     @Resource
     private StringRedisTemplate stringRedisTemplate;
-
     @Resource
     private IUserService userService;
+    @Resource
+    private IFollowService followService;
     /**
      * 查询最热博客
      * @param current
@@ -129,6 +136,86 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
             }
         }
         return Result.ok();
+    }
+
+    /**
+     * 查询关注列表的博客
+     * @param max
+     * @param offset
+     * @return
+     */
+    @Override
+    public Result queryBlogOfBlow(Long max, Integer offset) {
+        //1、获取当前用户
+        Long userId = UserHolder.getUser().getId();
+        //2、查询收件箱zreversrange m1 max min count offset
+        String key = FEED_KEY + userId;
+        Set<ZSetOperations.TypedTuple<String>> typedTuples = stringRedisTemplate.opsForZSet().
+                reverseRangeByScoreWithScores(key, 0, max, offset, 2);// key min max count offset
+        //3、解析数据：blogid,minTime(上一次查询的时间戳最小值) offset偏移值
+        if(typedTuples == null || typedTuples.isEmpty()){
+            return Result.ok();
+        }
+        List<Long> ids = new ArrayList<>(typedTuples.size());
+        long minTime = 0;
+        int offsetFinal = 1;//记录这个最后出现的时间戳在上一次查询中出现了几次
+        for (ZSetOperations.TypedTuple<String> tuple : typedTuples){
+            //3、1获取id
+            ids.add(Long.valueOf(tuple.getValue()));
+            //3、2获取分数
+            if(minTime == tuple.getScore().longValue()){
+                offsetFinal++;
+            }else{
+                minTime = tuple.getScore().longValue();
+                offsetFinal = 1;//最终要统计最后一个时间戳出现的次数
+            }
+        }
+        //4、根据id查询blog
+        String strs = StrUtil.join(",", ids);
+        List<Blog> blogList = query().in("id", ids).last("order by FIELD (id," + strs + ")").list();
+        for (Blog blog : blogList){
+            //查询blog有关用户
+            queryBlogUser(blog);
+            //查询当前用户是否点赞
+            isBlogLike(blog);
+        }
+        //5、封装并返回
+
+        ScollResult scollResult = new ScollResult();
+        scollResult.setList(blogList);
+        scollResult.setOffset(offsetFinal);
+        scollResult.setMinTime(minTime);
+        return Result.ok(scollResult);
+    }
+
+    /**
+     * 保存博客
+     * @param blog
+     * @return
+     */
+    @Override
+    public Result saveBlog(Blog blog) {
+        //1、获取登录用户
+        UserDTO userDTO = UserHolder.getUser();
+        //2、保存谈点笔记
+        blog.setUserId(userDTO.getId());
+        boolean success = save(blog);
+        if(!success){
+            return Result.fail("笔记保存失败");
+        }
+        //3、查询笔记作者的所有粉丝select * from tb_follow where follow_user_id = ?;
+        List<Follow> follows = followService.query().eq("follow_user_id", userDTO.getId()).list();
+        if(follows == null || follows.isEmpty()){
+            return Result.ok(Collections.emptyList());
+        }
+        //4、推送消息给所有粉丝
+        for (Follow follow : follows) {
+            Long followUserId = follow.getUserId();
+            String  key = FEED_KEY + followUserId;
+            stringRedisTemplate.opsForZSet().add(key, blog.getId().toString(), System.currentTimeMillis());
+        }
+        //5、返回笔记id
+        return Result.ok(blog.getId());
     }
 
     /**
