@@ -5,6 +5,7 @@ import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.RedisData;
 import com.hmdp.entity.Shop;
@@ -12,12 +13,19 @@ import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.CacheClient;
+import com.hmdp.utils.SystemConstants;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.GeoResult;
+import org.springframework.data.geo.GeoResults;
+import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.domain.geo.GeoReference;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 
 import java.time.LocalDateTime;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -69,11 +77,63 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         return shop;
     }
 
+    /**
+     * 根据商铺类型和查询条件分页查询商铺信息
+     * @param typeId 商铺类型
+     * @param current 页码
+     * @return 商铺列表
+     */
+    @Override
+    public Result queryShopByType(Integer typeId, Integer current, Double x, Double y) {
+        //1、判断是否需要根据坐标查询
+        if(x == null || y == null){
+            //此时不需要坐标查询，直接按照数据库进行查询
+            Page<Shop> page = query().eq("type_id", typeId).page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
+            return Result.ok(page.getRecords());
+        }
+        //2、计算分页参数
+        int start = (current - 1) * SystemConstants.DEFAULT_PAGE_SIZE;//起始索引
+        int end = current* SystemConstants.DEFAULT_PAGE_SIZE;//终止索引
+        //3、查询redis，按照距离排序，分页。结果，shopid distance
+        String key = SHOP_GEO_KEY + typeId;// geosearch key bylonlat x y byradius 5000 withdistance
+        GeoResults<RedisGeoCommands.GeoLocation<String>> results = stringRedisTemplate.opsForGeo().search(
+                key, //key
+                GeoReference.fromCoordinate(x, y),//坐标(经纬度)
+                new Distance(5000),//distance
+                RedisGeoCommands.GeoSearchCommandArgs.newGeoSearchArgs().includeDistance().limit(end));
+        if(results == null){
+            return Result.ok(Collections.emptyList());
+        }
+        //4、解析出id
+        List<GeoResult<RedisGeoCommands.GeoLocation<String>>> list = results.getContent();
+        if(list.size() <= start){
+            return Result.ok(Collections.emptyList());
+        }
+        List<Long> ids = new ArrayList();
+        Map<String,Distance> distanceMap = new HashMap<>();
+        list.stream().skip(start).forEach(result ->{
+            //获取店铺id
+            String shopIdStr = result.getContent().getName();
+            ids.add(Long.valueOf(shopIdStr));
+            //获取距离
+            Distance distance = result.getDistance();
+            distanceMap.put(shopIdStr,distance);
+        });
+        //5、根据id查询shop
+        String strs = StrUtil.join(",", ids);
+        List<Shop> shopList = query().in("id", ids).last("order by FIELD (id," + strs + ")").list();
+        //将店铺距离进行封装
+        for (Shop shop : shopList){
+            shop.setDistance(distanceMap.get(shop.getId().toString()).getValue());
+        }
+        //6、返回
+        return Result.ok(shopList);
 
-       /*     * 更新商铺信息
+    }
+
+    /*     * 更新商铺信息
       @param shop 更新的商铺信息
       @return 更新结果*/
-
     @Override
     public Result updateByShop(Shop shop) {
         //1、先修改商铺信息
@@ -81,7 +141,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         if(id == null){
             return Result.fail("店铺id不能为空");
         }
-        updateById( shop);
+        updateById(shop);
         //2、删除redis中的商铺信息
         stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
         //3、返回结果

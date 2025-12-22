@@ -180,7 +180,6 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
             isBlogLike(blog);
         }
         //5、封装并返回
-
         ScollResult scollResult = new ScollResult();
         scollResult.setList(blogList);
         scollResult.setOffset(offsetFinal);
